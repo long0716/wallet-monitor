@@ -1,0 +1,15 @@
+{
+  "name": "wallet-monitor",
+  "version": "1.0.0",
+  "description": "ETH/USDC wallet monitor with Telegram bot",
+  "main": "monitor.js",
+  "scripts": {
+    "start": "node monitor.js"
+  },
+  "dependencies": {
+    "ethers": "^6.0.0",
+    "axios": "^1.0.0",
+    "node-cron": "^3.0.0",
+    "better-sqlite3": "^9.0.0"
+  }
+}
