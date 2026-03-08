@@ -7,6 +7,7 @@ const RPC_URL = process.env.RPC_URL;
 const TG_TOKEN = process.env.TG_TOKEN;
 const USDC_ADDRESS = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
 const POLL_INTERVAL = 12000;
+const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY || "";
 
 const db = new Database("wallets.db");
 db.exec(`
@@ -211,24 +212,31 @@ async function pollTelegram() {
         const wallets = getWallets(chatId);
         if (!wallets.length) { await sendTG(chatId, "📋 当前没有监控地址"); continue; }
         await sendTG(chatId, "⏳ 正在查询历史授权，请稍候...");
-        const p = getProvider();
-        const usdc = new ethers.Contract(USDC_ADDRESS, USDC_ABI, p);
         for (const w of wallets) {
           try {
-            const currentBlock = await p.getBlockNumber();
-            const fromBlock = Math.max(0, currentBlock - 100000);
-            const events = await usdc.queryFilter(usdc.filters.Approval(w.address), fromBlock, currentBlock);
+            const topic0 = "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925";
+            const topic1 = "0x000000000000000000000000" + w.address.slice(2).toLowerCase();
+            const url = `https://api.etherscan.io/api?module=logs&action=getLogs&address=${USDC_ADDRESS}&topic0=${topic0}&topic1=${topic1}&apikey=${ETHERSCAN_API_KEY}`;
+            const resp = await axios.get(url);
+            const logs = resp.data.result;
+            if (!Array.isArray(logs) || logs.length === 0) {
+              await sendTG(chatId, `🔍 <b>${w.label}</b>\n✅ 无授权记录`);
+              continue;
+            }
             const spenderMap = {};
-            for (const e of events) {
-              spenderMap[e.args[1].toLowerCase()] = e.args[2];
+            for (const log of logs) {
+              const spender = "0x" + log.topics[2].slice(26).toLowerCase();
+              const amount = BigInt(log.data);
+              spenderMap[spender] = amount;
             }
             const active = Object.entries(spenderMap).filter(([, amt]) => amt > 0n);
             if (active.length === 0) {
-              await sendTG(chatId, `🔍 <b>${w.label}</b>\n✅ 近期无有效授权记录`);
+              await sendTG(chatId, `🔍 <b>${w.label}</b>\n✅ 无有效授权`);
             } else {
               let m = `🔍 <b>${w.label} 授权列表</b>\n⚠️ 共 ${active.length} 个有效授权\n\n`;
               for (const [spender, amt] of active) {
-                const isUnlimited = amt === ethers.MaxUint256;
+                const MAX = BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+                const isUnlimited = amt === MAX;
                 const amtStr = isUnlimited ? "♾️ 无限额 ⚠️危险" : parseFloat(ethers.formatUnits(amt, 6)).toFixed(2) + " USDC";
                 m += `📌 <code>${spender}</code>\n💰 额度: ${amtStr}\n\n`;
               }
