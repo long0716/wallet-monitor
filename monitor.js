@@ -214,31 +214,22 @@ async function pollTelegram() {
         await sendTG(chatId, "⏳ 正在查询历史授权，请稍候...");
         for (const w of wallets) {
           try {
-            const topic0 = "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925";
-            const topic1 = "0x000000000000000000000000" + w.address.slice(2).toLowerCase();
-            const url = `https://api.etherscan.io/api?module=logs&action=getLogs&address=${USDC_ADDRESS}&topic0=${topic0}&topic1=${topic1}&apikey=${ETHERSCAN_API_KEY}`;
+            const url = `https://api.etherscan.io/api?module=account&action=tokenapprovallist&address=${w.address}&apikey=${ETHERSCAN_API_KEY}`;
             const resp = await axios.get(url);
             const logs = resp.data.result;
             if (!Array.isArray(logs) || logs.length === 0) {
               await sendTG(chatId, `🔍 <b>${w.label}</b>\n✅ 无授权记录`);
               continue;
             }
-            const spenderMap = {};
-            for (const log of logs) {
-              const spender = "0x" + log.topics[2].slice(26).toLowerCase();
-              const amount = BigInt(log.data);
-              spenderMap[spender] = amount;
-            }
-            const active = Object.entries(spenderMap).filter(([, amt]) => amt > 0n);
-            if (active.length === 0) {
-              await sendTG(chatId, `🔍 <b>${w.label}</b>\n✅ 无有效授权`);
+            const usdcApprovals = logs.filter(a => a.tokenContractAddress && a.tokenContractAddress.toLowerCase() === USDC_ADDRESS.toLowerCase());
+            if (usdcApprovals.length === 0) {
+              await sendTG(chatId, `🔍 <b>${w.label}</b>\n✅ 无有效USDC授权`);
             } else {
-              let m = `🔍 <b>${w.label} 授权列表</b>\n⚠️ 共 ${active.length} 个有效授权\n\n`;
-              for (const [spender, amt] of active) {
-                const MAX = BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
-                const isUnlimited = amt === MAX;
-                const amtStr = isUnlimited ? "♾️ 无限额 ⚠️危险" : parseFloat(ethers.formatUnits(amt, 6)).toFixed(2) + " USDC";
-                m += `📌 <code>${spender}</code>\n💰 额度: ${amtStr}\n\n`;
+              let m = `🔍 <b>${w.label} 授权列表</b>\n⚠️ 共 ${usdcApprovals.length} 个有效授权\n\n`;
+              for (const a of usdcApprovals) {
+                const isUnlimited = a.value === "115792089237316195423570985008687907853269984665640564039457584007913129639935";
+                const amtStr = isUnlimited ? "♾️ 无限额 ⚠️危险" : (parseFloat(a.value) / 1e6).toFixed(2) + " USDC";
+                m += `📌 <code>${a.spenderAddress}</code>\n💰 额度: ${amtStr}\n\n`;
               }
               m += `💡 如需撤销请访问 revoke.cash`;
               await sendTG(chatId, m);
