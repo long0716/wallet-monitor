@@ -81,7 +81,6 @@ async function processBlock(blockNumber) {
   const p = getProvider();
   const usdc = new ethers.Contract(USDC_ADDRESS, USDC_ABI, p);
   try {
-    // USDC Transfer
     const transferEvents = await usdc.queryFilter(usdc.filters.Transfer(), blockNumber, blockNumber);
     for (const event of transferEvents) {
       const from = event.args[0].toLowerCase();
@@ -97,7 +96,6 @@ async function processBlock(blockNumber) {
       }
     }
 
-    // USDC Approval
     const approvalEvents = await usdc.queryFilter(usdc.filters.Approval(), blockNumber, blockNumber);
     for (const event of approvalEvents) {
       const owner = event.args[0].toLowerCase();
@@ -114,7 +112,6 @@ async function processBlock(blockNumber) {
       }
     }
 
-    // ETH转账
     const watchedAddresses = new Set(getAllWallets().map(w => w.address.toLowerCase()));
     if (watchedAddresses.size > 0) {
       const block = await p.getBlock(blockNumber, false);
@@ -183,16 +180,19 @@ async function pollTelegram() {
         const address = parts[1], label = parts.slice(2).join(" ") || "未命名";
         if (!address || !ethers.isAddress(address)) { await sendTG(chatId, "❌ 地址格式不正确\n用法: /add 0x地址 钱包名字"); continue; }
         await sendTG(chatId, addWallet(chatId, address, label) ? `✅ 已添加监控\n👛 ${label}\n📍 ${address}` : `⚠️ 该地址已在监控列表中`);
+
       } else if (cmd === "/remove") {
         const address = parts[1];
         if (!address) { await sendTG(chatId, "❌ 用法: /remove 0x地址"); continue; }
         await sendTG(chatId, removeWallet(chatId, address) ? `✅ 已删除\n📍 ${address}` : `❌ 未找到该地址`);
+
       } else if (cmd === "/list") {
         const wallets = getWallets(chatId);
         if (!wallets.length) { await sendTG(chatId, "📋 当前没有监控地址\n使用 /add 添加"); continue; }
         let m = `📋 <b>监控列表 (${wallets.length}个)</b>\n\n`;
         wallets.forEach((w, i) => { m += `${i+1}. 👛 ${w.label}\n📍 ${w.address}\n\n`; });
         await sendTG(chatId, m);
+
       } else if (cmd === "/balance") {
         const wallets = getWallets(chatId);
         if (!wallets.length) { await sendTG(chatId, "📋 当前没有监控地址"); continue; }
@@ -208,6 +208,7 @@ async function pollTelegram() {
           } catch (e) { m += `👛 ${w.label}: 查询失败\n\n`; }
         }
         await sendTG(chatId, m);
+
       } else if (cmd === "/approvals") {
         const wallets = getWallets(chatId);
         if (!wallets.length) { await sendTG(chatId, "📋 当前没有监控地址"); continue; }
@@ -218,15 +219,18 @@ async function pollTelegram() {
             const approvalTopic = "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925";
             const url = `https://api.etherscan.io/api?module=logs&action=getLogs&fromBlock=0&toBlock=latest&address=${USDC_ADDRESS}&topic0=${approvalTopic}&topic0_1_opr=and&topic1=${ownerPadded}&apikey=${ETHERSCAN_API_KEY}`;
             const resp = await axios.get(url);
-            if (resp.data.status !== "1" || !Array.isArray(resp.data.result)) {
-  await sendTG(chatId, `🔍 调试信息:\nstatus: ${resp.data.status}\nmessage: ${resp.data.message}\nresult: ${JSON.stringify(resp.data.result).slice(0,200)}`);
-  continue;
-}
-const logs = resp.data.result;
-await sendTG(chatId, `🔍 找到 ${logs.length} 条记录`);
-            const logs = resp.data.result;
+            const rawResult = resp.data;
+
+            if (rawResult.status !== "1") {
+              await sendTG(chatId, `🔍 <b>${w.label}</b>\nAPI状态: ${rawResult.status}\n信息: ${rawResult.message}\n内容: ${String(rawResult.result).slice(0, 150)}`);
+              continue;
+            }
+
+            const allLogs = rawResult.result;
+            await sendTG(chatId, `🔍 共找到 ${allLogs.length} 条授权记录`);
+
             const spenderMap = {};
-            for (const log of logs) {
+            for (const log of allLogs) {
               if (!log.topics || log.topics.length < 3) continue;
               const spender = "0x" + log.topics[2].slice(26).toLowerCase();
               if (!spenderMap[spender] || parseInt(log.blockNumber, 16) > parseInt(spenderMap[spender].blockNumber, 16)) {
@@ -235,7 +239,7 @@ await sendTG(chatId, `🔍 找到 ${logs.length} 条记录`);
             }
             const active = Object.entries(spenderMap).filter(([, log]) => BigInt(log.data) > 0n);
             if (active.length === 0) {
-              await sendTG(chatId, `🔍 <b>${w.label}</b>\n✅ 无有效授权`);
+              await sendTG(chatId, `✅ <b>${w.label}</b> 无有效授权`);
             } else {
               let m = `🔍 <b>${w.label} 授权列表</b>\n⚠️ 共 ${active.length} 个有效授权\n\n`;
               for (const [spender, log] of active) {
@@ -252,6 +256,7 @@ await sendTG(chatId, `🔍 找到 ${logs.length} 条记录`);
             await sendTG(chatId, `👛 ${w.label}: 查询失败 ${e.message}`);
           }
         }
+
       } else if (cmd === "/help") {
         await sendTG(chatId, `🤖 <b>钱包监控Bot</b>\n\n/add 地址 名字 → 添加监控\n/remove 地址 → 删除监控\n/list → 查看列表\n/balance → 查询余额\n/approvals → 查询历史授权\n/help → 帮助`);
       }
