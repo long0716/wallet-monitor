@@ -219,9 +219,11 @@ async function pollTelegram() {
             const url = `https://api.etherscan.io/api?module=logs&action=getLogs&fromBlock=0&toBlock=latest&address=${USDC_ADDRESS}&topic0=${approvalTopic}&topic0_1_opr=and&topic1=${ownerPadded}&apikey=${ETHERSCAN_API_KEY}`;
             const resp = await axios.get(url);
             if (resp.data.status !== "1" || !Array.isArray(resp.data.result)) {
-              await sendTG(chatId, `🔍 <b>${w.label}</b>\n✅ 无授权记录`);
-              continue;
-            }
+  await sendTG(chatId, `🔍 调试信息:\nstatus: ${resp.data.status}\nmessage: ${resp.data.message}\nresult: ${JSON.stringify(resp.data.result).slice(0,200)}`);
+  continue;
+}
+const logs = resp.data.result;
+await sendTG(chatId, `🔍 找到 ${logs.length} 条记录`);
             const logs = resp.data.result;
             const spenderMap = {};
             for (const log of logs) {
