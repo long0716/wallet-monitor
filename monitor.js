@@ -7,7 +7,7 @@ const Database = require("better-sqlite3");
 const RPC_URL = process.env.RPC_URL;
 const TG_TOKEN = process.env.TG_TOKEN;
 const USDC_ADDRESS = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
-const POLL_INTERVAL = 12000; // 12秒轮询一次
+const POLL_INTERVAL = 12000;
 // ==========================
 
 const db = new Database("wallets.db");
@@ -39,7 +39,6 @@ function getProvider() {
   return provider;
 }
 
-// ========== 数据库操作 ==========
 function addWallet(chatId, address, label) {
   try {
     db.prepare("INSERT OR IGNORE INTO wallets (chat_id, address, label) VALUES (?, ?, ?)").run(chatId, address.toLowerCase(), label);
@@ -73,7 +72,6 @@ function setLastBlock(blockNumber) {
   db.prepare("INSERT OR REPLACE INTO last_block (id, block_number) VALUES (1, ?)").run(blockNumber);
 }
 
-// ========== Telegram ==========
 async function sendTG(chatId, msg) {
   try {
     await axios.post(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
@@ -87,16 +85,13 @@ async function sendTG(chatId, msg) {
   }
 }
 
-// ========== 轮询区块处理 ==========
 async function processBlock(blockNumber) {
   const p = getProvider();
   const usdc = new ethers.Contract(USDC_ADDRESS, USDC_ABI, p);
 
   try {
-    // 获取USDC Transfer事件
-    const transferFilter = usdc.filters.Transfer();
-    const transferEvents = await usdc.queryFilter(transferFilter, blockNumber, blockNumber);
-
+    // USDC Transfer事件
+    const transferEvents = await usdc.queryFilter(usdc.filters.Transfer(), blockNumber, blockNumber);
     for (const event of transferEvents) {
       const from = event.args[0].toLowerCase();
       const to = event.args[1].toLowerCase();
@@ -116,7 +111,6 @@ async function processBlock(blockNumber) {
           `🔗 <a href="https://etherscan.io/tx/${event.transactionHash}">查看交易</a>`
         );
       }
-
       for (const w of toWallets) {
         const bal = await usdc.balanceOf(w.address);
         await sendTG(w.chat_id,
@@ -129,10 +123,8 @@ async function processBlock(blockNumber) {
       }
     }
 
-    // 获取USDC Approval事件
-    const approvalFilter = usdc.filters.Approval();
-    const approvalEvents = await usdc.queryFilter(approvalFilter, blockNumber, blockNumber);
-
+    // USDC Approval事件
+    const approvalEvents = await usdc.queryFilter(usdc.filters.Approval(), blockNumber, blockNumber);
     for (const event of approvalEvents) {
       const owner = event.args[0].toLowerCase();
       const spender = event.args[1].toLowerCase();
@@ -147,24 +139,21 @@ async function processBlock(blockNumber) {
 
       for (const w of wallets) {
         await sendTG(w.chat_id,
-          `${title}\n` +
-          `👛 钱包: ${w.label}\n` +
-          `授权给: <code>${spender}</code>\n` +
-          `额度: ${amountFormatted}\n` +
+          `${title}\n👛 钱包: ${w.label}\n授权给: <code>${spender}</code>\n额度: ${amountFormatted}\n` +
           `🔗 <a href="https://etherscan.io/tx/${event.transactionHash}">查看交易</a>`
         );
       }
     }
 
-    // 获取ETH转账
+    // ETH转账 - 读取区块所有交易
     const block = await p.getBlock(blockNumber, true);
-    if (block?.transactions) {
+    if (block && block.transactions) {
       for (const tx of block.transactions) {
         if (!tx || tx.value === 0n) continue;
-
-        const fromWallets = getWalletsByAddress(tx.from);
-        const toWallets = tx.to ? getWalletsByAddress(tx.to) : [];
-
+        const fromAddr = tx.from ? tx.from.toLowerCase() : null;
+        const toAddr = tx.to ? tx.to.toLowerCase() : null;
+        const fromWallets = fromAddr ? getWalletsByAddress(fromAddr) : [];
+        const toWallets = toAddr ? getWalletsByAddress(toAddr) : [];
         if (fromWallets.length === 0 && toWallets.length === 0) continue;
 
         const ethAmount = parseFloat(ethers.formatEther(tx.value)).toFixed(4);
@@ -179,7 +168,6 @@ async function processBlock(blockNumber) {
             `🔗 <a href="https://etherscan.io/tx/${tx.hash}">查看交易</a>`
           );
         }
-
         for (const w of toWallets) {
           const bal = await p.getBalance(tx.to);
           await sendTG(w.chat_id,
@@ -207,23 +195,19 @@ async function pollBlocks() {
     if (!lastBlock) {
       setLastBlock(latestBlock);
       console.log(`初始化区块: ${latestBlock}`);
-      return;
+    } else if (latestBlock > lastBlock) {
+      const fromBlock = Math.max(lastBlock + 1, latestBlock - 4);
+      console.log(`扫描区块: ${fromBlock} ~ ${latestBlock}`);
+      for (let i = fromBlock; i <= latestBlock; i++) {
+        await processBlock(i);
+      }
+      setLastBlock(latestBlock);
+    } else {
+      console.log(`区块无更新: ${latestBlock}`);
     }
-
-    if (latestBlock <= lastBlock) return;
-
-    // 最多处理5个区块，防止积压
-    const fromBlock = Math.max(lastBlock + 1, latestBlock - 4);
-
-    for (let i = fromBlock; i <= latestBlock; i++) {
-      console.log(`处理区块: ${i}`);
-      await processBlock(i);
-    }
-
-    setLastBlock(latestBlock);
   } catch (err) {
     console.error("轮询错误:", err.message);
-    provider = null; // 重置连接
+    provider = null;
   }
 
   setTimeout(pollBlocks, POLL_INTERVAL);
@@ -259,13 +243,11 @@ async function pollTelegram() {
           ? `✅ 已添加监控\n👛 ${label}\n📍 ${address}`
           : `⚠️ 该地址已在监控列表中`
         );
-
       } else if (cmd === "/remove") {
         const address = parts[1];
         if (!address) { await sendTG(chatId, "❌ 用法: /remove 0x地址"); continue; }
         const removed = removeWallet(chatId, address);
         await sendTG(chatId, removed ? `✅ 已删除\n📍 ${address}` : `❌ 未找到该地址`);
-
       } else if (cmd === "/list") {
         const wallets = getWallets(chatId);
         if (wallets.length === 0) {
@@ -275,7 +257,6 @@ async function pollTelegram() {
           wallets.forEach((w, i) => { m += `${i + 1}. 👛 ${w.label}\n📍 ${w.address}\n\n`; });
           await sendTG(chatId, m);
         }
-
       } else if (cmd === "/balance") {
         const wallets = getWallets(chatId);
         if (wallets.length === 0) { await sendTG(chatId, "📋 当前没有监控地址"); continue; }
@@ -291,7 +272,6 @@ async function pollTelegram() {
           } catch (e) { m += `👛 ${w.label}: 查询失败\n\n`; }
         }
         await sendTG(chatId, m);
-
       } else if (cmd === "/help") {
         await sendTG(chatId,
           `🤖 <b>钱包监控Bot</b>\n\n` +
@@ -319,10 +299,8 @@ cron.schedule("0 8 * * *", async () => {
     if (!chatGroups[w.chat_id]) chatGroups[w.chat_id] = [];
     chatGroups[w.chat_id].push(w);
   }
-
   const p = getProvider();
   const usdc = new ethers.Contract(USDC_ADDRESS, USDC_ABI, p);
-
   for (const [chatId, wallets] of Object.entries(chatGroups)) {
     const now = new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" });
     let msg = `📊 <b>每日余额汇总</b>\n🕐 ${now}\n\n`;
